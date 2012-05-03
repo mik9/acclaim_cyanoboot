@@ -2,7 +2,6 @@
  * include/max17042.h
  *
  * Copyright (C) 2010 Barnes & Noble, Inc.
- * Intrinsyc Software International, Inc. on behalf of Barnes & Noble, Inc.
  *
  * Max17042 Gas Gauge initialization for u-boot
  *

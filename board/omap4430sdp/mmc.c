@@ -31,8 +31,10 @@
 #include <fastboot.h>
 #include <twl6030.h>
 #include <asm/arch/sys_proto.h>
+#include <omap4430sdp_lcd.h>
 
 #include "gpio.h"
+#include "menu.h"
 
 #define EFI_VERSION 0x00010000
 #define EFI_ENTRIES 128
@@ -41,7 +43,7 @@
 #define WARM_RESET ( 1 << 1 )
 #define COLD_RESET ( 1 )
 
-#define HOME_BUTTON		32
+#define HOME_BUTTON	32
 #define POWER_BUTTON	29
 
 /* Windows Basic data partition GUID */
@@ -261,6 +263,10 @@ struct partition {
 };
 
 static const struct partition partitions[] = {
+/*
+
+original values
+
 	{ "-", 128 },
 	{ "xloader", 128 },
 	{ "bootloader", 256 },
@@ -272,6 +278,38 @@ static const struct partition partitions[] = {
 	{ "userdata", 512*1024},
 	{ "media", 0 },
 	{ 0, 0 },
+*/
+
+/*  this is from cat /proc/partitions */
+
+	{ "-", 128 },
+	{ "xloader", 128 },
+	{ "bootloader", 256 },
+	{ "recovery", 15360 },
+	{ "boot", 16384 },
+	{ "-", ((49152*2)+378880) }, /* rom, bootdata & factory */
+	{ "system", 626688 },
+	{ "cache", 436224 },
+	{ "media", 1048576},
+	{ "userdata", 12646380 },
+	{ 0, 0 },
+/*
+
+Alternate way of saying the above...
+
+	{ "-", 128 },
+	{ "xloader", 128 },
+	{ "bootloader", 256 },
+	{ "-", 512 },
+	{ "recovery", 1024*30 },
+	{ "boot", 1024*32 },
+	( "-", (1024*96*2)+(1024*740)) }, 
+	{ "system", 1024*1224 }, 
+	{ "cache", 852*1024 }, 
+	{ "media", 2048*1024},
+	{ "userdata", 25292760 },
+	{ 0, 0 },
+*/
 };
 
 static struct ptable the_ptable;
@@ -335,6 +373,7 @@ struct bootloader_message {
 	char status[32];
 	char recovery[1024];
 };
+
 // Shared sprintf buffer for fatsave
 static char buf[64];
 
@@ -343,6 +382,59 @@ static inline int read_bcb(void)
 	return run_command("mmcinit 1; fatload mmc 1:5 0x81000000 BCB 2048", 0);
 }
 
+// do a device override using u-boot.altboot like on the nookcolor
+
+static char device;
+
+inline char read_u_boot_device(void)
+{
+	sprintf(buf, "mmcinit 1; fatload mmc 1:5 0x%08x u-boot.device 1", &device);
+	if (run_command(buf, 0)) {  //no such file
+		return 'X'; // this is going to mean no such file, or I guess the file could have 'X'...
+	} else {
+	return device;
+	}
+}
+
+inline int write_u_boot_device(char value)
+{
+	sprintf(buf, "mmcinit 1; fatsave mmc 1:5 0x%08x u-boot.device 1", &value);
+	if (run_command(buf, 0)) {
+		printf("Error: Cannot write /bootdata/u-boot.device.\n");
+		return 0;
+		}
+	return value;
+}
+
+inline char read_u_boot_altboot(void)
+{
+	sprintf(buf, "mmcinit 1; fatload mmc 1:5 0x%08x u-boot.altboot 1", &device);
+	if (run_command(buf, 0)) {  //no such file
+		return 'X'; // this is going to mean no such file, or I guess the file could have 'X'...
+	} else {
+	return device;
+	}
+}
+
+inline char read_u_boot_clearbc(void)
+{
+	sprintf(buf, "mmcinit 1; fatload mmc 1:5 0x%08x u-boot.clearbc 1", &device);
+	if (run_command(buf, 0)) {  //no such file
+		return 'X'; // this is going to mean no such file, or I guess the file could have 'X'...
+	} else {
+	return device;
+	}
+}
+
+inline int write_u_boot_altboot(char value)
+{
+	sprintf(buf, "mmcinit 1; fatsave mmc 1:5 0x%08x u-boot.altboot 1", &value);
+	if (run_command(buf, 0)) {
+		printf("Error: Cannot write /bootdata/u-boot.altboot.\n");
+		return 0;
+		}
+	return value;
+}
 static void write_bcb(const struct bootloader_message * const bcb)
 {
 	sprintf(buf, "mmcinit 1; fatsave mmc 1:5 0x%08x BCB", bcb);
@@ -358,16 +450,16 @@ static const struct bootloader_message romrestore_bcb = {
 #ifdef CONFIG_BOOTCOUNT_LIMIT
 unsigned long bootcount_load(void)
 {
-	if (running_from_sd()) {
+/*	if (running_from_sd()) {
 		return 0;
-	}
+	} */
 
 	unsigned long bootcount = ACCLAIM_BOOTLIMIT + 1; // Set bootcount to limit+1 per default, in case we fail to read it apply factory fallback 
 
 	sprintf(buf, "mmcinit 1; fatload mmc 1:5 0x%08x BootCnt 4", &bootcount);
 	if (run_command(buf, 0)) {
-		printf("No BootCnt found, rom restore forced.\n");
-		write_bcb(&romrestore_bcb);
+		printf("No BootCnt.\n");
+	        sprintf("none", &bootcount);
 	}
 	return bootcount;
 }
@@ -380,26 +472,24 @@ static const struct bootloader_message factory_bcb = {
 
 void bootcount_store(unsigned long bootcount)
 {
-	if (running_from_sd()) {
-		return;
-	}
 
 	printf("BootCnt %lu\n", bootcount);
-	if (bootcount > ACCLAIM_BOOTLIMIT) {
+/*	if (bootcount > ACCLAIM_BOOTLIMIT) {
 		// In case we have reached the bootlimit
 		// we write the factory restore bcb
-		write_bcb(&factory_bcb);
+		write_bcb(&factory_bcb); 
 
 		// and to prevent us from applying the factory
 		// fallback for infinity we clear it before entering recovery
 		bootcount = 0;
-	}
+	}  */
 
 	sprintf(buf, "mmcinit 1; fatsave mmc 1:5 0x%08x BootCnt", &bootcount);
 	if (run_command(buf, 0)) {
 		printf("Cannot write BootCnt, rom restore forced.\n");
-		write_bcb(&romrestore_bcb);
+//		write_bcb(&romrestore_bcb);
 	}
+return;
 }
 #endif
 
@@ -448,124 +538,189 @@ static int check_update_zip(void)
 	return -1;
 }
 
-enum boot_action {
-	BOOT_SD,
-	RECOVERY,
-	BOOT_EMMC,
-	INVALID,
-};
+static void display_feedback(enum boot_action image)
+{
+//	uint16_t *image_start;
+//	uint16_t *image_end;
+
+	lcd_bl_set_brightness(255);
+ 	lcd_console_setpos(52, 25);
+	lcd_console_setcolor(CONSOLE_COLOR_CYAN, CONSOLE_COLOR_BLACK);
+
+	switch(image) {
+
+	case BOOT_EMMC_NORMAL:
+		lcd_puts("    Loading (EMMC)...");
+		break;
+	case BOOT_SD_RECOVERY:
+		lcd_puts("Loading Recovery from SD...");
+		break;
+	case BOOT_SD_ALTBOOT:
+		lcd_puts(" Loading AltBoot from SD...");
+		break;
+	case BOOT_SD_NORMAL:
+		lcd_puts("     Loading (SD)...");
+		break;
+	case BOOT_EMMC_RECOVERY:
+		lcd_puts("Loading Recovery from EMMC...");
+		break;
+	case BOOT_EMMC_ALTBOOT:
+		lcd_puts(" Loading AltBoot from EMMC...");
+		break;
+	case BOOT_FASTBOOT:
+		lcd_puts(" - fastboot has started -");
+		break;
+	default:
+		lcd_puts("        Loading...");
+		break;
+	}
+
+	//lcd_display_image(image_start, image_end);
+}
 
 static inline enum boot_action get_boot_action(void) 
 {
-	static struct bootloader_message update_bcb = {
-		.command = "boot-recovery",
-		.status = "",
-		.recovery = "",
-	};
-
-	static const struct bootloader_message master_clear_bcb = {
-		.command = "boot-recovery",
-		.status = "",
-		.recovery = "recovery\n--wipe_data_ui\n",
-	};
-
-	volatile unsigned int *reset_reason = (unsigned int *) 0x4A307B04;
-	volatile struct bootloader_message *bcb = (struct bootloader_message *) 0x81000000;
-	static const char reboot_panic[] = "reboot\0panic";
-
 	u8 pwron = 0;
-	int update_zip;
-
-	if (!memcmp((const char *) PUBLIC_SAR_RAM_1_FREE, reboot_panic, sizeof(reboot_panic))) {
-		printf("REBOOT DUE TO KERNEL PANIC!\n");
-	}
-
-	// First check for sd boot
-	if (running_from_sd()) {
-		printf("Booting from sd\n");
-		return BOOT_SD;
-	}
+        volatile struct bootloader_message *bcb = (struct bootloader_message *) 0x81000000;
+	volatile unsigned int *reset_reason = (unsigned int *) 0x4A307B04;
 
 	if (mmc_init(1)) {
 		printf("mmc_init failed!\n");
 		return INVALID;
 	}
 
-	if (load_serial_num()) {
-		printf("No serialnum found, rom restore forced.\n");
-		write_bcb(&romrestore_bcb);
-		return RECOVERY;
+	// clear bootcount if requested
+	if (read_u_boot_clearbc()=='1') {
+		bootcount_store((unsigned long)0);
 	}
 
-	fastboot_flash_dump_ptn();
+        // Then check if there's a BCB file
 
-	// Then check if there's a BCB file
+        if (!read_bcb()) {
+                printf("BCB found, checking...\n");
 
-	if (!read_bcb()) {
-		printf("BCB found, checking...\n");
-			
-		if (bcb->command[0] != 0 &&
-			bcb->command[0] != 255) {
-			printf("Booting into recovery\n");
-			return RECOVERY;
+                if (bcb->command[0] != 0 &&
+                        bcb->command[0] != 255) {
+                      	  if (running_from_sd()) {
+				return BOOT_SD_RECOVERY;
+				}
+				return BOOT_EMMC_RECOVERY;
+			  }
+                } else {
+		lcd_console_setpos(53, 15);
+		lcd_console_setcolor(CONSOLE_COLOR_ORANGE, CONSOLE_COLOR_BLACK);
+		lcd_puts("/bootdata/BCB missing.  Running recovery.");
+		if (running_from_sd()) {
+			return BOOT_SD_RECOVERY;
+			}
+			return BOOT_EMMC_RECOVERY;
+                }
+
+	// give them time to press the button(s)
+	udelay(2000*1000);
+
+        	if ((gpio_read(HOME_BUTTON) == 0) &&
+               		 (gpio_read(POWER_BUTTON) == 1)) {  // BOTH KEYS STILL HELD FROM UB1
+		if (running_from_sd()) {
+			return BOOT_SD_RECOVERY;
+			}
+			return BOOT_EMMC_RECOVERY;
 		}
-	} else {
-		printf("No BCB found, recovery mode forced.\n");
-		return RECOVERY;
-	}
 
-	// If cold reboot/start
-	if (!(*reset_reason & WARM_RESET) && 
-		strcmp((const char *) PUBLIC_SAR_RAM_1_FREE, "reboot")) {
-
-		// Then check for update zip on sd
-		update_zip = check_update_zip();
-
-		if (update_zip >= 0 && update_zip < ARRAY_SIZE(update_zip_names)) {
-			sprintf(update_bcb.recovery, "recovery\n--update_package=/sdcard/%s\n--update_factory\n", update_zip_names[update_zip]);
-			write_bcb(&update_bcb);
-			printf("Found %s, booting into recovery\n", update_zip_names[update_zip]);
-			return RECOVERY;
+		if ((gpio_read(HOME_BUTTON) == 0) &&
+               		 (gpio_read(POWER_BUTTON) == 0))    // just HOME button is pressed
+		{ return do_menu();
 		}
-	} else if (!strcmp((const char *) PUBLIC_SAR_RAM_1_FREE, "recovery")) {
-		printf("Rebooted with recovery reason, booting into recovery\n");
-		return RECOVERY;
-	}
+	else	// default boot
+		{
 
-	if (twl6030_hw_status(&pwron)) {
-		printf("Failed to read twl6030 hw_status\n");
+		char device_flag, altboot_flag;
+		if ((running_from_sd()) && (!((device_flag = read_u_boot_device()) == '1'))) {
+			if (altboot_flag = read_u_boot_altboot() == '1') {
+				lcd_console_setpos(53, 15);
+				lcd_console_setcolor(CONSOLE_COLOR_ORANGE, CONSOLE_COLOR_BLACK);
+				lcd_puts("Normal SD boot overridden.  Alt boot from SD...");
+				return BOOT_SD_ALTBOOT;
+			} else {
+				return BOOT_SD_NORMAL;
+			}
+		} else { 	// running from emmc or overridden
+				if (altboot_flag = read_u_boot_altboot() == '1') {
+					lcd_console_setpos(53, 11);
+					lcd_console_setcolor(CONSOLE_COLOR_ORANGE, CONSOLE_COLOR_BLACK);
+					lcd_puts("Normal SD boot overridden.  Alt boot from EMMC...");
+					return BOOT_EMMC_ALTBOOT; }
+				else {
+					if ((device_flag == '1') && (running_from_sd())) {
+					lcd_console_setpos(53, 15);
+					lcd_console_setcolor(CONSOLE_COLOR_ORANGE, CONSOLE_COLOR_BLACK);
+					lcd_puts("SD boot overridden.  Normal boot from EMMC..."); }
+					return BOOT_EMMC_NORMAL;
+				}
+		}
 	}
-
-	// Check master clear button press combination (power+home)
-	// note that home button is inverted
-	if ((gpio_read(HOME_BUTTON) == 0) &&
-		(pwron & STS_PWRON) != STS_PWRON) {
-		printf("Master Clear forced, booting into recovery\n");
-		write_bcb(&master_clear_bcb);
-		return RECOVERY;
-	}
-
-	printf("Booting into Android\n");
-	return BOOT_EMMC;
 }
 
 int determine_boot_type(void)
 {
+
+	unsigned long bootcount = bootcount_load();
+	char s [5];
 	setenv("bootlimit", stringify(ACCLAIM_BOOTLIMIT));
 	setenv("altbootcmd", "mmcinit 1; booti mmc1 recovery");
 
+	lcd_console_init();
+	// give subtle indicator if uboot is booting from emmc or sd
+
+	lcd_console_setpos(0, 1); //indent slightly
+	lcd_console_setcolor(CONSOLE_COLOR_GRAY, CONSOLE_COLOR_BLACK);
+	if (running_from_sd()) {
+		lcd_putc('S');
+		} else {
+		lcd_putc('E'); }
+	sprintf(s, " %u", bootcount);
+	lcd_puts(s);
+
 	switch(get_boot_action()) {
-	case BOOT_SD:
-		setenv ("bootcmd", "setenv setbootargs setenv bootargs ${sdbootargs}; run setbootargs; mmcinit 0; fatload mmc 0:1 0x81000000 flashing_boot.img; booti 0x81000000");
+	case BOOT_SD_NORMAL:
+		setenv ("bootcmd", "setenv setbootargs setenv bootargs ${sdbootargs}; run setbootargs; mmcinit 0; fatload mmc 0:1 0x81000000 boot.img; booti 0x81000000");
 		setenv ("altbootcmd", "run bootcmd"); // for sd boot altbootcmd is the same as bootcmd
+		display_feedback(BOOT_SD_NORMAL);
 		break;
 
-	case RECOVERY:
-		setenv("bootcmd", "mmcinit 1; booti mmc1 recovery");
+        case BOOT_SD_RECOVERY:
+                setenv ("bootcmd", "setenv setbootargs setenv bootargs ${sdbootargs}; run setbootargs; mmcinit 0; fatload mmc 0:1 0x81000000 recovery.img; booti 0x81000000");
+                setenv ("altbootcmd", "run bootcmd"); // for sd boot altbootcmd is the same as bootcmd
+		display_feedback(BOOT_SD_RECOVERY);
+                break;
+
+	case BOOT_SD_ALTBOOT:
+		setenv ("bootcmd", "setenv setbootargs setenv bootargs ${sdbootargs}; run setbootargs; mmcinit 0; fatload mmc 0:1 0x81000000 altboot.img; booti 0x81000000");
+		setenv ("altbootcmd", "run bootcmd"); // for sd boot altbootcmd is the same as bootcmd
+		display_feedback(BOOT_SD_ALTBOOT);
 		break;
 
-	case BOOT_EMMC:
-		setenv("bootcmd", "mmcinit 1; booti mmc1 boot");
+        //actually, boot from boot+512K -- thanks bauwks!
+	case BOOT_EMMC_NORMAL:
+		setenv("bootcmd", "mmcinit 1; booti mmc1 boot 0x80000");
+		display_feedback(BOOT_EMMC_NORMAL);
+		break;
+
+	//actually, boot from recovery+512K -- thanks bauwks!
+	case BOOT_EMMC_RECOVERY:
+		setenv("bootcmd", "mmcinit 1; booti mmc1 recovery 0x80000");
+		display_feedback(BOOT_EMMC_RECOVERY);
+		break;
+
+	case BOOT_EMMC_ALTBOOT:  // no 512K offset, this is just a file.
+		setenv ("bootcmd", "setenv setbootargs setenv bootargs ${emmcbootargs}; run setbootargs; mmcinit 1; fatload mmc 1:5 0x81000000 altboot.img; booti 0x81000000");
+		setenv ("altbootcmd", "run bootcmd"); // for emmc altboot altbootcmd is the same as bootcmd
+		display_feedback(BOOT_EMMC_ALTBOOT);
+		break;
+
+	case BOOT_FASTBOOT:
+		display_feedback(BOOT_FASTBOOT);
+                run_command("fastboot", 0);
 		break;
 	case INVALID:
 	default:

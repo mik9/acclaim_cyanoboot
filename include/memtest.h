@@ -2,7 +2,6 @@
  * include/memtest.h
  *
  * Copyright (C) 2010 Barnes & Noble, Inc.
- * Intrinsyc Software International, Inc. on behalf of Barnes & Noble, Inc.
  *
  * RAM test functions
  *

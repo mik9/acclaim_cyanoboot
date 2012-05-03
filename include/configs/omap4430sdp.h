@@ -161,7 +161,8 @@
 #define CONFIG_BOOTARGS ""
 #define CONFIG_EXTRA_ENV_SETTINGS \
 	"commonbootargs=" stringify(BOARD_KERNEL_CMDLINE) "\0" \
-	"sdbootargs=${commonbootargs} root=/dev/mmcblk1p2 rw" "\0"
+	"sdbootargs=${commonbootargs} root=/dev/mmcblk1p2 rw" "\0" \
+	"emmcbootargs=${commonbootargs} root=/dev/mmcblk1p2 rw" "\0"
 
 #define CONFIG_BOOTCOMMAND "booti mmc1"
 
@@ -194,6 +195,10 @@
 
 #define CFG_64BIT_STRTOUL        1
 #define CFG_NO_FLASH             1
+
+#define CONFIG_SYS_PBSIZE CFG_PBSIZE
+#define CONFIG_SYS_CBSIZE CFG_CBSIZE
+#define CONFIG_SPLASH_SCREEN_ALIGN
 
 
 /* 2430 has 12 GP timers, they can be driven by the SysClk (12/13/19.2) or by
@@ -260,6 +265,7 @@
 /* Fastboot variables */
 #define CFG_FASTBOOT_TRANSFER_BUFFER (PHYS_SDRAM_1 + SZ_16M)
 #define CFG_FASTBOOT_TRANSFER_BUFFER_SIZE (SZ_512M - SZ_16M)
+
 
 
 /*-----------------------------------------------------------------------

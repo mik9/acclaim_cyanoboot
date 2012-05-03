@@ -2,7 +2,6 @@
  * board/omap3621_boxer/max17042.c
  *
  * Copyright (C) 2010 Barnes & Noble, Inc.
- * Intrinsyc Software International, Inc. on behalf of Barnes & Noble, Inc.
  *
  * Max17042 Gas Gauge initialization for u-boot
  *
@@ -952,7 +951,7 @@ int max17042_init(int load)
 	static const uint16_t* bufp = (uint16_t*) 0x81000000;
 
 	uint16_t* savestorep;
-	int err, retries=2;
+	int err, retries=2, force_por=0;
 	uint16_t designcap;
 
 	type_params = &param_table[get_battery_type(load)];
@@ -1008,10 +1007,11 @@ int max17042_init(int load)
 	         (save_store.val_FullCAPNom < (uint16_t)(((uint32_t)designcap)*MIN_CAPNOM_AGING)) ||
 		 (save_store.val_FullCAPNom > (uint16_t)(((uint32_t)designcap)*MAX_CAPNOM_AGING)) )
 		{
-		printf("Resetting battery defaults due to faulty CAPACITY (0x%x, 0x%x)\n",
-		    save_store.val_FullCAP, save_store.val_FullCAPNom);
+ 			printf("Resetting battery defaults due to faulty CAPACITY (0x%x, 0x%x)\n",
+ 				save_store.val_FullCAP, save_store.val_FullCAPNom);
 
-		is_history_exist = 0;
+ 			force_por = 1;
+ 			is_history_exist = 0;
 		}
 	    else
 		{
@@ -1025,6 +1025,7 @@ int max17042_init(int load)
 			printf("Resetting battery defaults because Design Capactiy(0x%04X)in history data"
 			" does not match battery's Design Capacity(0x%04X)\n", 
 				save_store.val_DesignCap, designcap);
+			force_por = 1;
 			is_history_exist = 0;
 		} 			
 	}
@@ -1036,8 +1037,10 @@ int max17042_init(int load)
 	if ( !is_power_on )
 	{
 	    // when there is no history file, assume it is a POR
-	    if ( is_history_exist && max17042_check_init_config() == 0 )
-	    {
+ 	    //if ( is_history_exist && max17042_check_init_config() == 0 )
+ 	    // UPDATE: if history file doesn't exist don't do a POR,
+ 		if (!force_por && max17042_check_init_config() == 0 )
+	    	{
 		DEBUG("MAX17042+UBOOT: warm config is okay\n");
 		return 0;
 	    }

@@ -37,8 +37,9 @@
 #define GPIO_BL_PWR_EN	38
 #define GPIO_LCD_BL_PWM	143
 
+#define GPIO_CHG_DOK	81
 #define GPIO_CHG_IUSB	83
-#define GPIO_CHG_EN		60
+#define GPIO_CHG_EN	60
 
 #define GPIO_CHG_USUS_EVT1A		96
 #define GPIO_DC_CHG_ILM_EVT1A	97	
@@ -101,6 +102,7 @@ static void charger_enable(enum charge_level_t level, int emergency_charge)
 {
 	int chg_usus = GPIO_CHG_USUS_EVT1A;
 	int dc_chg_ilm = GPIO_DC_CHG_ILM_EVT1A;
+	int chg_dok = GPIO_CHG_DOK;
 
 	if (get_board_revision() >= ACCLAIM_DVT) {
 		printf("Identified DVT or newer, using its charging GPIOs\n");
@@ -116,6 +118,10 @@ static void charger_enable(enum charge_level_t level, int emergency_charge)
 		// In case of emergency charge only do 500mA
 		level = CHARGE_500mA;
 	}
+
+	// Detect the cable used. If normal USB cable, limit to 500mA
+	if ((level == CHARGE_1800mA) && gpio_read(chg_dok))
+		level = CHARGE_500mA;
 
 	switch(level) {
 	case CHARGE_DISABLE:
@@ -236,6 +242,7 @@ static void display_image(enum image_t image, uint16_t soc)
 	}
 
 	switch(image) {
+	/* should never be the case with uboot2.  This is caught by uboot1.
 	case IMAGE_CHARGE_NEEDED:
 		image_start = (uint16_t *) _binary_connect_charge_rle_start;
 		image_end = (uint16_t *) _binary_connect_charge_rle_end;
@@ -243,7 +250,7 @@ static void display_image(enum image_t image, uint16_t soc)
 	case IMAGE_CHARGING:
 		image_start = (uint16_t *) _binary_lowbatt_charge_rle_start;
 		image_end = (uint16_t *) _binary_lowbatt_charge_rle_end;
-		break;
+		break;   */
 	case IMAGE_BOOT:
 	default:
 		image_start = (uint16_t *) _binary_o_nookcolor_logo_large_rle_start;

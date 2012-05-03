@@ -36,6 +36,7 @@
 #include <asm/byteorder.h>
 #include <mmc.h>
 #include "omap4_hs.h"
+#include <omap4430sdp_lcd.h>
 
 typedef struct {
 	u32 image;
@@ -85,8 +86,6 @@ typedef struct {
 #if defined(CONFIG_HW_WATCHDOG) || defined(CONFIG_WATCHDOG)
 # define CHUNKSZ (64 * 1024)
 #endif
-
-#define KERNEL_OFFSET 0x120
 
 int  gunzip (void *, int, unsigned char *, unsigned long *);
 
@@ -173,13 +172,9 @@ int do_bootm (cmd_tbl_t *cmdtp, int flag, int argc, char *argv[])
 	char	*name, *s;
 	int	(*appl)(int, char *[]);
 	image_header_t *hdr = &header;
-	image_type image;
 
 	s = getenv ("verify");
 	verify = (s && (*s == 'n')) ? 0 : 1;
-
-	image.image = 3;
-	image.val = 99;
 
 	if (argc < 2) {
 		addr = load_addr;
@@ -187,17 +182,8 @@ int do_bootm (cmd_tbl_t *cmdtp, int flag, int argc, char *argv[])
 		addr = simple_strtoul(argv[1], NULL, 16);
 	}
 
-	image.data = (u8*) ( (u8*) addr - KERNEL_OFFSET );
-
 	SHOW_BOOT_PROGRESS (1);
 	printf ("## Booting image at %08lx ...\n", addr);
-
-	SEC_ENTRY_Std_Ppa_Call ( PPA_SERV_HAL_BN_CHK , 1 , &image );
-
-	if ( image.val != 0 ) {
-		printf (" Image  at %p seems to be corrupt, cannot power up",image.data);
-		while(1);
-	}
 
 	/* Copy header so we can blank CRC field for re-calculation */
 #ifdef CONFIG_HAS_DATAFLASH
@@ -1451,17 +1437,20 @@ static unsigned char boothdr[512];
 
 #define ALIGN(n,pagesz) ((n + (pagesz - 1)) & (~(pagesz - 1)))
 
-/* booti <addr> [ mmc0 | mmc1 [ <partition> ] ] */
+/* booti <addr> [ mmc0 | mmc1 [ <partition> [offset] ] ] */
 int do_booti (cmd_tbl_t *cmdtp, int flag, int argc, char *argv[])
 {
 	unsigned addr;
+	unsigned int mmcc_sect_offset = 0;
+	unsigned int kernel_offset = 0;
 	char *ptn = "boot";
 	int mmcc = -1;
 	boot_img_hdr *hdr = (void*) boothdr;
-	image_type image;
 
 	if (argc < 2)
 		return -1;
+	if (argc > 3)
+		mmcc_sect_offset = simple_strtoul(argv[3], NULL, 0) / 512;
 
 	if (!strcmp(argv[1],"mmc0")) {
 		mmcc = 0;
@@ -1471,14 +1460,12 @@ int do_booti (cmd_tbl_t *cmdtp, int flag, int argc, char *argv[])
 		addr = simple_strtoul(argv[1], NULL, 16);
 	}
 
-	image.image = 3;
-	image.val = 99;
-
 	if (argc > 2)
 		ptn = argv[2];
 
 	pmic_set_vpp();
-
+	lcd_console_setpos(54, 15);
+	lcd_console_setcolor(CONSOLE_COLOR_BLACK, CONSOLE_COLOR_RED);
 	if (mmcc != -1) {
 #if (CONFIG_MMC)
 		struct fastboot_ptentry *pte;
@@ -1486,33 +1473,67 @@ int do_booti (cmd_tbl_t *cmdtp, int flag, int argc, char *argv[])
 
 		pte = fastboot_flash_find_ptn(ptn);
 		if (!pte) {
+			lcd_puts(sprintf("%s%s%s", "booti: cannot find ", ptn, "  partition"));
 			printf("booti: cannot find '%s' partition\n", ptn);
 			goto fail;
 		}
 		if (mmc_init(mmcc)) {
+			lcd_puts("mmcinit failed");
 			printf("mmc%d init failed\n", mmcc);
 			goto fail;
 		}
-		if (mmc_read(mmcc, pte->start, (void*) hdr, 512) != 1) {
+		if (mmc_read(mmcc, pte->start + mmcc_sect_offset, (void*) hdr, 512) != 1) {
+			lcd_puts("booti: mmc failed to read bootimg header");
 			printf("booti: mmc failed to read bootimg header\n");
 			goto fail;
 		}
 
 		if (memcmp(hdr->magic, BOOT_MAGIC, 8)) {
-			printf("booti: bad boot image magic\n");
-			goto fail;
+			if (mmcc_sect_offset == 0 )  { // no offset?  Screw it.
+					lcd_puts("booti: bad boot image magic");
+					printf("booti: bad boot image magic\n");
+					goto fail;
+				       }
+			else {   // there was an offset requested, but maybe it's the 256 offset used by Bauwks' uboot.  Try again.
+					mmcc_sect_offset =  simple_strtoul("0x40000", NULL, 0) / 512;  // switch to Bauwks' mmcc_sect_offset
+					kernel_offset = 0;   	     // switch to no kernel_offset
+				// re-read header
+				if (mmc_read(mmcc, pte->start + mmcc_sect_offset, (void*) hdr, 512) != 1) {
+					printf("booti: 2nd try mmc failed to read bootimg header\n");
+					lcd_puts("booti 2nd try mmc failed to read bootimg header");
+					goto fail;
+				}
+				// re-check boot magic
+				if (memcmp(hdr->magic, BOOT_MAGIC, 8)) {
+						// Lets give it one last chance-- maybe this is actually stock.
+						mmcc_sect_offset = 0;    // switch to stock mmcc_sect_offset
+						kernel_offset = 0x120;   // switch to stock kernel_offset
+						if (mmc_read(mmcc, pte->start + mmcc_sect_offset, (void*) hdr, 512) != 1) {
+							printf("booti: 3rd try mmc failed to read bootimg header\n");
+							lcd_puts("booti 3rd try mmc failed to read bootimg header");
+							goto fail;
+						}
+						if (memcmp(hdr->magic, BOOT_MAGIC, 8)) {
+							printf("booti:  bad boot image magic\n");
+							lcd_puts("booti  bad boot image magic");
+							goto fail;
+						}
+				}
+			}
 		}
 
-		sector = pte->start + (hdr->page_size / 512);
+		sector = pte->start + mmcc_sect_offset + (hdr->page_size / 512);
 		if (mmc_read(mmcc, sector, (void*) hdr->kernel_addr,
 			     hdr->kernel_size) != 1) {
+			lcd_puts("booti: failed to read kernel\n");
 			printf("booti: failed to read kernel\n");
 			goto fail;
 		}
 
 		sector += ALIGN(hdr->kernel_size, hdr->page_size) / 512;
-		if (mmc_read(mmcc, sector, (void*) (((u8*)hdr->ramdisk_addr - KERNEL_OFFSET )),
+		if (mmc_read(mmcc, sector, (void*) (((u8*) hdr->ramdisk_addr - kernel_offset )),
 			     hdr->ramdisk_size) != 1) {
+			lcd_puts("booti: failed to read ramdisk\n");
 			printf("booti: failed to read ramdisk\n");
 			goto fail;
 		}
@@ -1526,7 +1547,8 @@ int do_booti (cmd_tbl_t *cmdtp, int flag, int argc, char *argv[])
 		memcpy(hdr, (void*) addr, sizeof(*hdr));
 
 		if (memcmp(hdr->magic, BOOT_MAGIC, 8)) {
-			printf("booti: bad boot image magic\n");
+			lcd_puts("booti: bad boot image magic (in memory)\n");
+			printf("booti: bad boot image magic (in memory)\n");
 			return 1;
 		}
 
@@ -1535,54 +1557,31 @@ int do_booti (cmd_tbl_t *cmdtp, int flag, int argc, char *argv[])
 		kaddr = addr + hdr->page_size;
 		raddr = kaddr + ALIGN(hdr->kernel_size, hdr->page_size);
 
-		memmove((void*) (hdr->kernel_addr-KERNEL_OFFSET), kaddr, hdr->kernel_size);
-		memmove((void*) (hdr->ramdisk_addr-KERNEL_OFFSET), raddr, hdr->ramdisk_size);
+		memmove((void*) (hdr->kernel_addr-kernel_offset), kaddr, hdr->kernel_size);
+		memmove((void*) (hdr->ramdisk_addr-kernel_offset), raddr, hdr->ramdisk_size);
+
 	}
 
 	if ( mmcc != -1 ) {
-		/* Incase or raw partiton, kernel start is at kernel_addr+KERNEL_OFFSET */
-		image.data = hdr->kernel_addr;
-		hdr->kernel_addr = (void*) ((u8*) ( hdr->kernel_addr ) + KERNEL_OFFSET );
-	} else {
-		/* Incase of fat partition, kernel start is at kernel_addr */
-		image.data = (hdr->kernel_addr-KERNEL_OFFSET);
+		hdr->kernel_addr = (void*) ((u8*) ( hdr->kernel_addr ) + kernel_offset );
 	}
-	SEC_ENTRY_Std_Ppa_Call ( PPA_SERV_HAL_BN_CHK , 1 , &image );
-	if ( image.val == 0 ) {
-		printf("kernel   @ %08x (%d)\n", hdr->kernel_addr, hdr->kernel_size);
-	} else {
-		printf(" kernel image has been corrupted, cannot boot\n");
-		do_reset (NULL, 0, 0, NULL);
-	}
-
-	image.image = 4;
-	image.val = 99;
-	image.data = (((u8*)hdr->ramdisk_addr ) - KERNEL_OFFSET );
-	SEC_ENTRY_Std_Ppa_Call ( PPA_SERV_HAL_BN_CHK , 1 , &image );
-	if ( image.val == 0 ) {
-		printf("ramdisk  @ %08x (%d)\n", hdr->ramdisk_addr, hdr->ramdisk_size);
-		hdr->ramdisk_size = ( hdr->ramdisk_size - KERNEL_OFFSET );
-		pmic_close_vpp();
-		do_booti_linux(hdr);
-	} else {
-		printf(" Ramdisk image has been corrupted , cannot boot\n");
-		do_reset (NULL, 0, 0, NULL);
-	}
-
-	puts ("booti: Control returned to monitor - resetting...\n");
-	do_reset (cmdtp, flag, argc, argv);
+	printf("kernel   @ %08x (%d)\n", hdr->kernel_addr, hdr->kernel_size);
+	printf("ramdisk  @ %08x (%d)\n", hdr->ramdisk_addr, hdr->ramdisk_size);
+	hdr->ramdisk_size = ( hdr->ramdisk_size - kernel_offset );
+	pmic_close_vpp();
+	do_booti_linux(hdr);
 	return 1;
 
 fail:
-#ifdef CONFIG_ACCLAIM
-	do_factory_fallback();
-#else
-	return do_fastboot(NULL, 0, 0, NULL);
-#endif
+//#ifdef CONFIG_ACCLAIM
+//	do_factory_fallback();
+//#else
+	return do_fastboot(NULL, 0, 0, NULL);  //run fastboot if there's an issue.
+//#endif
 }
 
 U_BOOT_CMD(
-	booti,	3,	1,	do_booti,
+	booti,	4,	1,	do_booti,
 	"booti   - boot android bootimg from memory\n",
 	"<addr>\n    - boot application image stored in memory\n"
 	"\t'addr' should be the address of boot image which is zImage+ramdisk.img\n"
